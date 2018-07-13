@@ -20,6 +20,31 @@
     </properties>
 
     <dependencies>
+        <!-- TODO: use something more specific? -->
+        <dependency>
+            <groupId>com.hazelcast.jet</groupId>
+            <artifactId>hazelcast-jet</artifactId>
+            <version>0.6.1</version>
+        </dependency>
+        <!-- TODO: embed -->
+        <dependency>
+            <groupId>com.amazonaws</groupId>
+            <artifactId>aws-java-sdk-kinesis</artifactId>
+            <version>1.11.361</version>
+        </dependency>
+        <!-- TODO: for test purpose -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <!-- TODO: similar to the ver. used by AWS SDK -->
+            <version>2.6.7.1</version>
+        </dependency>
+        <!-- TODO: try to not rely on it much -->
+        <dependency>
+            <groupId>com.google.guava</groupId>
+            <artifactId>guava</artifactId>
+            <version>25.1-jre</version>
+        </dependency>
     </dependencies>
 
 </project>
