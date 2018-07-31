@@ -26,7 +26,7 @@
             <artifactId>hazelcast-jet</artifactId>
             <version>0.6.1</version>
         </dependency>
-        <!-- TODO: embed -->
+        <!-- TODO: embed ? -->
         <dependency>
             <groupId>com.amazonaws</groupId>
             <artifactId>aws-java-sdk-kinesis</artifactId>
@@ -44,6 +44,12 @@
             <groupId>com.google.guava</groupId>
             <artifactId>guava</artifactId>
             <version>25.1-jre</version>
+        </dependency>
+        <dependency>
+            <groupId>org.testng</groupId>
+            <artifactId>testng</artifactId>
+            <version>6.14.3</version>
+            <scope>test</scope>
         </dependency>
     </dependencies>
 

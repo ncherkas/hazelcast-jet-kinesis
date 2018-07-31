@@ -31,6 +31,7 @@ public class KinesisTestClient {
 
     private static final String DEFAULT_STREAM_NAME = "nc_test_stream_01";
     private static final Regions DEFAULT_REGION = Regions.EU_CENTRAL_1;
+    private static final int WRITE_LIMIT = 100_000;
     private static final int READ_LIMIT = 10_000;
 
     private final String streamName;
@@ -119,9 +120,12 @@ public class KinesisTestClient {
         }
 
         KinesisTestClient testClient = new KinesisTestClient(DEFAULT_STREAM_NAME, DEFAULT_REGION, null, null);
-        for (int i = 0; i < Math.max(args.length, 2); i++) {
+        for (int i = 0; i < args.length; i++) {
             String command = args[i];
             switch (command) {
+                case "describe":
+                    testClient.describe();
+                    break;
                 case "write":
                     write(testClient);
                     break;
@@ -134,10 +138,16 @@ public class KinesisTestClient {
         }
     }
 
-    private static void write(KinesisTestClient testClient) {
-        System.out.println("Writing " + READ_LIMIT + " events to the stream...");
+    private void describe() {
+        DescribeStreamResult describeStreamResult = amazonKinesis.describeStream(DEFAULT_STREAM_NAME);
+        List<Shard> shards = describeStreamResult.getStreamDescription().getShards();
+        System.out.println(shards);
+    }
 
-        for (int i = 0; i < READ_LIMIT; i++) {
+    private static void write(KinesisTestClient testClient) {
+        System.out.println("Writing " + WRITE_LIMIT + " events to the stream...");
+
+        for (int i = 0; i < WRITE_LIMIT; i++) {
             String userKey = "u" + ThreadLocalRandom.current().nextInt(1, 11);
             String device = ThreadLocalRandom.current().nextBoolean() ? "laptop" : "mobile";
             TestEvent.Type type = TestEvent.Type.values()[ThreadLocalRandom.current().nextInt(0, TestEvent.Type.values().length)];
