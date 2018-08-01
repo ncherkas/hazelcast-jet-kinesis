@@ -13,6 +13,7 @@ import com.hazelcast.jet.core.Outbox;
 import com.hazelcast.jet.core.Processor;
 import com.hazelcast.jet.core.ProcessorSupplier;
 import com.hazelcast.jet.function.DistributedFunction;
+import com.hazelcast.logging.ILogger;
 
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
@@ -34,6 +35,8 @@ public class WriteKinesisP<T> implements Processor {
     private final AtomicLong putsCounter = new AtomicLong();
     private int processorIndex;
 
+    private ILogger logger;
+
     /**
      * TODO: implement batching
      */
@@ -47,6 +50,7 @@ public class WriteKinesisP<T> implements Processor {
     @Override
     public void init(@Nonnull Outbox outbox, @Nonnull Context context) {
         this.processorIndex = context.globalProcessorIndex();
+        this.logger = context.logger();
     }
 
     @Override
@@ -66,7 +70,7 @@ public class WriteKinesisP<T> implements Processor {
             amazonKinesis.putRecord(putRecordRequest);
 
             if (putsCounter.incrementAndGet() % 100 == 0) {
-                System.out.println("[#" + processorIndex + "] " + putsCounter.get() + " puts so far...");
+                logger.info("[#" + processorIndex + "] " + putsCounter.get() + " puts so far...");
             }
 
         });

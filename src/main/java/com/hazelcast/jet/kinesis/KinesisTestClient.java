@@ -22,6 +22,9 @@ import java.util.concurrent.ThreadLocalRandom;
 
 import static java.util.stream.Collectors.toList;
 
+/**
+ * Just for test purpose. Will be removed later.
+ */
 public class KinesisTestClient {
 
     /**

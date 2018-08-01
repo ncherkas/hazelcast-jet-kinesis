@@ -34,6 +34,10 @@ import static java.util.Collections.emptyList;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static java.util.stream.Collectors.*;
 
+/**
+ * Amazon Kinesis Source.
+ * @param <T> data type
+ */
 public class StreamKinesisP<T> extends AbstractProcessor {
 
     private static final long METADATA_CHECK_INTERVAL_NANOS = SECONDS.toNanos(10); // TODO: double check the value
@@ -60,8 +64,9 @@ public class StreamKinesisP<T> extends AbstractProcessor {
 
     /**
      * TODO: multiple streams?
-     * TODO: google @Nonnull annotations?
+     * TODO: google/jet @Nonnull annotations?
      * TODO: check for retention period
+     * TODO: fault tolerance
      */
     public StreamKinesisP(Regions region, AWSCredentials awsCredentials, String streamName,
                           DistributedFunction<Record, T> projectionFn,
@@ -91,13 +96,13 @@ public class StreamKinesisP<T> extends AbstractProcessor {
         this.totalParallelism = context.totalParallelism();
         this.wsuPartitionCount = 0;
 
-        // Maybe we can inject the IMap somehow else?
+        // TODO: Maybe we can inject the ISet somehow else?
         JetInstance jetClient = Jet.newJetClient();
         this.closedProcessedShards = jetClient.getHazelcastInstance().getSet("streamKinesis_" + streamName + "_closedProcessedShards");
 
         assignShards(false);
 
-        System.out.println("[#" + processorIndex + "] StreamKinesisP::init completed!");
+        getLogger().info("[#" + processorIndex + "] StreamKinesisP::init completed!");
     }
 
 
@@ -120,14 +125,14 @@ public class StreamKinesisP<T> extends AbstractProcessor {
                     : null;
         } while (exclusiveStartShardId != null);
 
-        System.out.println("[#" + processorIndex + "] All available shards: ");
+        getLogger().info("[#" + processorIndex + "] All available shards: ");
         shards.forEach(s -> System.out.print(s.getShardId() + "::" + s.getParentShardId() + ", "
                 + (s.getSequenceNumberRange().getEndingSequenceNumber() == null ? "open; " : "closed; ")));
 
         Map<String, Shard> newAssignment = getAssignment(shards);
         assignedShards.keySet().forEach(newAssignment::remove);
         if (!newAssignment.isEmpty()) {
-            System.out.println("[#" + processorIndex + "] Shard assignment has changed, added shards: " + newAssignment.keySet());
+            getLogger().info("[#" + processorIndex + "] Shard assignment has changed, added shards: " + newAssignment.keySet());
 
             for (Map.Entry<String, Shard> shardEntry : newAssignment.entrySet()) {
                 String shardId = shardEntry.getKey();
@@ -135,12 +140,12 @@ public class StreamKinesisP<T> extends AbstractProcessor {
                 assignedShards.put(shardId, new ShardInfo(shard.getParentShardId(), shard.getAdjacentParentShardId(), assignedShards.size()));
             }
 
-            System.out.println("[#" + processorIndex + "] Current shard assignment: " + assignedShards.keySet());
+            getLogger().info("[#" + processorIndex + "] Current shard assignment: " + assignedShards.keySet());
 
             // TODO: Hack, double check this
             int assignedShardsCount = assignedShards.size();
             if (assignedShardsCount > wsuPartitionCount) {
-                System.out.println("[#" + processorIndex + "] Hacking the Watermark Source Util...");
+                getLogger().info("[#" + processorIndex + "] Hacking the Watermark Source Util...");
                 wsuPartitionCount = assignedShardsCount;
                 watermarkSourceUtil.increasePartitionCount(assignedShardsCount);
             }
@@ -173,7 +178,7 @@ public class StreamKinesisP<T> extends AbstractProcessor {
 
         Iterable<Shard> bfTraversedShards = shardsTraverser.breadthFirst(rootShards);
 
-        System.out.println("[#" + processorIndex + "] BF Traversal: " + Iterables.transform(bfTraversedShards, Shard::getShardId));
+        getLogger().info("[#" + processorIndex + "] BF Traversal: " + Iterables.transform(bfTraversedShards, Shard::getShardId));
         List<Shard> bfOrderedShards = Lists.newArrayList(bfTraversedShards);
 
         Map<String, Shard> assignment = new LinkedHashMap<>();
@@ -212,19 +217,19 @@ public class StreamKinesisP<T> extends AbstractProcessor {
                     || (parentShardId != null && !closedProcessedShards.contains(parentShardId))
                     || (adjacentParentShardId != null && !closedProcessedShards.contains(adjacentParentShardId))) {
 
-//                System.out.println("[#" + processorIndex + "] Won't read the shard " + shardInfo + "...");
+//                getLogger().info("[#" + processorIndex + "] Won't read the shard " + shardInfo + "...");
 
                 continue;
             }
 
-            System.out.println("[#" + processorIndex + "] Reading the data from shard " + shardId + "...");
+            getLogger().info("[#" + processorIndex + "] Reading the data from shard " + shardId + "...");
 
             String shardIterator = shardInfo.getCurrentShardIterator();
             String lastSequenceNumber = shardInfo.getLastSequenceNumber();
             int wmSourceUtilIndex = shardInfo.getWmSourceUtilIndex();
 
             if (shardIterator == null) {
-                System.out.println("[#" + processorIndex + "] Retrieving the shard iterator...");
+                getLogger().info("[#" + processorIndex + "] Retrieving the shard iterator...");
 
                 GetShardIteratorRequest shardIteratorRequest = new GetShardIteratorRequest()
                         .withStreamName(streamName)
@@ -275,10 +280,10 @@ public class StreamKinesisP<T> extends AbstractProcessor {
         }
 
         if (!closedShards.isEmpty()) {
-            System.out.println("[#" + processorIndex + "] The following closed shards has been processed: " + closedShards);
+            getLogger().info("[#" + processorIndex + "] The following closed shards has been processed: " + closedShards);
             closedProcessedShards.addAll(closedShards);
 
-            System.out.println("[#" + processorIndex + "] All closed processed shards: ");
+            getLogger().info("[#" + processorIndex + "] All closed processed shards: ");
             closedProcessedShards.forEach(System.out::println);
 
             assignShards(false);
@@ -297,7 +302,7 @@ public class StreamKinesisP<T> extends AbstractProcessor {
 
     @Override
     public void close(Throwable error) {
-        System.out.println("[#" + processorIndex + "] Releasing the resources...");
+        getLogger().info("[#" + processorIndex + "] Releasing the resources...");
         if (amazonKinesis != null) {
             amazonKinesis.shutdown();
         }
