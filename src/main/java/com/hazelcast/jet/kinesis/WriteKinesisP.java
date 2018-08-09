@@ -74,20 +74,22 @@ public class WriteKinesisP<T> implements Processor {
         }
 
         // TODO: Do we need this if we've already implemented complete() ?
-        if (!buffer.isEmpty()) {
-            flush();
-        }
+        flush();
     }
 
     private void flush() {
+        if (buffer.isEmpty()) {
+            return;
+        }
+
         List<PutRecordsRequestEntry> records = buffer.stream()
                 .map(this::toPutRecordsRequestEntry)
                 .collect(toList());
 
         kinesisClient.putRecords(records);
-        buffer.clear();
-
         logger.info("[#" + processorIndex + "] " + putsCounter.incrementAndGet() + " batch puts so far...");
+
+        buffer.clear();
     }
 
     private PutRecordsRequestEntry toPutRecordsRequestEntry(T item) {
@@ -98,9 +100,7 @@ public class WriteKinesisP<T> implements Processor {
 
     @Override
     public boolean complete() {
-        if (!buffer.isEmpty()) {
-            flush();
-        }
+        flush();
         return true;
     }
 
