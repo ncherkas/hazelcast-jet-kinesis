@@ -12,6 +12,7 @@ import static com.amazonaws.services.kinesis.model.ShardIteratorType.TRIM_HORIZO
 
 /**
  * Works with Amazon Kinesis API.
+ * TODO: switch to AWS Async SDK v2 since the Kinesis part of it is already recommended for prod use
  */
 public class KinesisClient implements Closeable {
 

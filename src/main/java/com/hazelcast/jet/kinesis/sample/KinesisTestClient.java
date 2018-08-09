@@ -28,8 +28,7 @@ import static java.util.stream.Collectors.toList;
 public class KinesisTestClient {
 
     /**
-     * TODO: Logger
-     * TODO: Builder?
+     * TODO: consider https://aws.amazon.com/blogs/big-data/test-your-streaming-data-solution-with-the-new-amazon-kinesis-data-generator/
      */
 
     private static final String DEFAULT_STREAM_NAME = "nc_test_stream_01";
