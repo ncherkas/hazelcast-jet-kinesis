@@ -1,4 +1,4 @@
-package com.hazelcast.jet.kinesis;
+package com.hazelcast.jet.kinesis.sample;
 
 import com.amazonaws.auth.*;
 import com.amazonaws.auth.profile.ProfileCredentialsProvider;
@@ -76,8 +76,7 @@ public class KinesisTestClient {
             throw new RuntimeException("Failed to serialize the test event instance " + event, e);
         }
 
-        PutRecordResult putRecordResult = amazonKinesis.putRecord(putRecordRequest);
-        // System.out.println("Put Record Result: " + putRecordResult);
+        amazonKinesis.putRecord(putRecordRequest);
     }
 
     public List<TestEvent> read() {

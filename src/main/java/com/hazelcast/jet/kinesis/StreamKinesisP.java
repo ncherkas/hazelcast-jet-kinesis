@@ -11,7 +11,6 @@ import com.amazonaws.services.kinesis.model.*;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
-import com.hazelcast.jet.Jet;
 import com.hazelcast.jet.JetInstance;
 import com.hazelcast.jet.Traverser;
 import com.hazelcast.jet.Traversers;
@@ -21,15 +20,15 @@ import com.hazelcast.jet.core.WatermarkGenerationParams;
 import com.hazelcast.jet.core.WatermarkSourceUtil;
 import com.hazelcast.jet.function.DistributedFunction;
 import com.hazelcast.jet.function.DistributedSupplier;
+import com.hazelcast.logging.ILogger;
 
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
-import static com.amazonaws.services.kinesis.model.ShardIteratorType.AFTER_SEQUENCE_NUMBER;
-import static com.amazonaws.services.kinesis.model.ShardIteratorType.TRIM_HORIZON;
 import static com.hazelcast.jet.Traversers.traverseIterable;
+import static com.hazelcast.jet.kinesis.Utils.sleepInterruptibly;
 import static java.util.Collections.emptyList;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static java.util.stream.Collectors.*;
@@ -40,9 +39,7 @@ import static java.util.stream.Collectors.*;
  */
 public class StreamKinesisP<T> extends AbstractProcessor {
 
-    private static final long METADATA_CHECK_INTERVAL_NANOS = SECONDS.toNanos(10); // TODO: double check the value
-//    private static final int READ_LIMIT = 10_000;
-    private static final int READ_LIMIT = 1000; // For the simple test
+    private static final long METADATA_CHECK_INTERVAL_NANOS = SECONDS.toNanos(5);
 
     private final Regions region;
     private final AWSCredentials awsCredentials;
@@ -51,7 +48,7 @@ public class StreamKinesisP<T> extends AbstractProcessor {
     private final WatermarkSourceUtil<T> watermarkSourceUtil;
     private final Map<String, ShardInfo> assignedShards;
 
-    private AmazonKinesis amazonKinesis;
+    private KinesisClient kinesisClient;
     private Traverser<Object> traverser = Traversers.empty(); // Why <Object> ?
     @VisibleForTesting
     Set<String> closedProcessedShards; // Hazelcast ISet
@@ -63,10 +60,10 @@ public class StreamKinesisP<T> extends AbstractProcessor {
     private int wsuPartitionCount;
 
     /**
-     * TODO: multiple streams?
      * TODO: google/jet @Nonnull annotations?
      * TODO: check for retention period
      * TODO: fault tolerance
+     * TODO: fine log level instead of info
      */
     public StreamKinesisP(Regions region, AWSCredentials awsCredentials, String streamName,
                           DistributedFunction<Record, T> projectionFn,
@@ -82,76 +79,81 @@ public class StreamKinesisP<T> extends AbstractProcessor {
 
     @Override
     protected void init(Context context) {
+        // TODO: can we clean up {@code awsCredentials} at this point?
         AWSCredentialsProvider credentialsProvider = awsCredentials != null
                 ? new AWSStaticCredentialsProvider(awsCredentials)
                 : new DefaultAWSCredentialsProviderChain();
 
         // TODO: allow to pass a client config
-        this.amazonKinesis = AmazonKinesisClientBuilder.standard()
+        AmazonKinesis amazonKinesis = AmazonKinesisClientBuilder.standard()
                 .withRegion(region)
                 .withCredentials(credentialsProvider)
                 .build();
+
+        this.kinesisClient = new KinesisClient(streamName, amazonKinesis);
 
         this.processorIndex = context.globalProcessorIndex();
         this.totalParallelism = context.totalParallelism();
         this.wsuPartitionCount = 0;
 
-        // TODO: Maybe we can inject the ISet somehow else?
-        JetInstance jetClient = Jet.newJetClient();
-        this.closedProcessedShards = jetClient.getHazelcastInstance().getSet("streamKinesis_" + streamName + "_closedProcessedShards");
+        // TODO: double check the ISet naming
+        JetInstance jetInstance = context.jetInstance();
+        this.closedProcessedShards =
+                jetInstance.getHazelcastInstance().getSet("streamKinesis_" + streamName + "_closedProcessedShards");
 
         assignShards(false);
 
-        getLogger().info("[#" + processorIndex + "] StreamKinesisP::init completed!");
+        logger().info("[#" + processorIndex + "] StreamKinesisP::init completed!");
     }
 
+    @VisibleForTesting
+    ILogger logger() {
+        return getLogger();
+    }
 
     private void assignShards(boolean checkMetadataInterval) {
         if (checkMetadataInterval && System.nanoTime() < nextMetadataCheck) {
             return;
         }
 
-        List<Shard> shards = new ArrayList<>();
-
-        DescribeStreamRequest describeStreamRequest = new DescribeStreamRequest();
-        describeStreamRequest.setStreamName(streamName);
-        String exclusiveStartShardId = null;
-        do {
-            describeStreamRequest.setExclusiveStartShardId(exclusiveStartShardId);
-            DescribeStreamResult describeStreamResult = amazonKinesis.describeStream(describeStreamRequest);
-            shards.addAll(describeStreamResult.getStreamDescription().getShards());
-            exclusiveStartShardId = describeStreamResult.getStreamDescription().getHasMoreShards() && shards.size() > 0
-                    ? shards.get(shards.size() - 1).getShardId()
-                    : null;
-        } while (exclusiveStartShardId != null);
-
-        getLogger().info("[#" + processorIndex + "] All available shards: ");
-        shards.forEach(s -> System.out.print(s.getShardId() + "::" + s.getParentShardId() + ", "
-                + (s.getSequenceNumberRange().getEndingSequenceNumber() == null ? "open; " : "closed; ")));
+        List<Shard> shards = kinesisClient.getShards();
+        logAllShards(shards);
 
         Map<String, Shard> newAssignment = getAssignment(shards);
         assignedShards.keySet().forEach(newAssignment::remove);
         if (!newAssignment.isEmpty()) {
-            getLogger().info("[#" + processorIndex + "] Shard assignment has changed, added shards: " + newAssignment.keySet());
+            logger().info("[#" + processorIndex + "] Shard assignment has changed, added shards: "
+                    + newAssignment.keySet());
 
             for (Map.Entry<String, Shard> shardEntry : newAssignment.entrySet()) {
                 String shardId = shardEntry.getKey();
                 Shard shard = shardEntry.getValue();
-                assignedShards.put(shardId, new ShardInfo(shard.getParentShardId(), shard.getAdjacentParentShardId(), assignedShards.size()));
+                assignedShards.put(shardId, new ShardInfo(shard.getParentShardId(),
+                        shard.getAdjacentParentShardId(), assignedShards.size()));
             }
 
-            getLogger().info("[#" + processorIndex + "] Current shard assignment: " + assignedShards.keySet());
+            logger().info("[#" + processorIndex + "] Current shard assignment: " + assignedShards.keySet());
 
             // TODO: Hack, double check this
             int assignedShardsCount = assignedShards.size();
             if (assignedShardsCount > wsuPartitionCount) {
-                getLogger().info("[#" + processorIndex + "] Hacking the Watermark Source Util...");
                 wsuPartitionCount = assignedShardsCount;
                 watermarkSourceUtil.increasePartitionCount(assignedShardsCount);
+            } else {
+                logger().info("[#" + processorIndex + "] Hacking the Watermark Source Util...");
             }
         }
 
         nextMetadataCheck = System.nanoTime() + METADATA_CHECK_INTERVAL_NANOS;
+    }
+
+    private void logAllShards(List<Shard> shards) {
+        StringBuffer allShardsMsgBuilder = new StringBuffer("[#" + processorIndex + "] All available shards: ");
+        shards.forEach(s -> allShardsMsgBuilder.append(s.getShardId()).append("::")
+                .append(s.getParentShardId()).append(", ")
+                .append(s.getAdjacentParentShardId()).append(", ")
+                .append(s.getSequenceNumberRange().getEndingSequenceNumber() == null ? "open; " : "closed; "));
+        logger().info(allShardsMsgBuilder.toString());
     }
 
     @VisibleForTesting
@@ -178,7 +180,7 @@ public class StreamKinesisP<T> extends AbstractProcessor {
 
         Iterable<Shard> bfTraversedShards = shardsTraverser.breadthFirst(rootShards);
 
-        getLogger().info("[#" + processorIndex + "] BF Traversal: " + Iterables.transform(bfTraversedShards, Shard::getShardId));
+        logger().info("[#" + processorIndex + "] BF Traversal: " + Iterables.transform(bfTraversedShards, Shard::getShardId));
         List<Shard> bfOrderedShards = Lists.newArrayList(bfTraversedShards);
 
         Map<String, Shard> assignment = new LinkedHashMap<>();
@@ -207,7 +209,7 @@ public class StreamKinesisP<T> extends AbstractProcessor {
         List<Traverser<Object>> partialResultTraversers = new ArrayList<>();
         Set<String> closedShards = new HashSet<>();
 
-        // TODO: check if consumer.poll(POLL_TIMEOUT_MS); in Kafka shuffles the messages
+        // TODO: check if consumer.poll(POLL_TIMEOUT_MS); in Kafka shuffles/sorts the messages
         for (Map.Entry<String, ShardInfo> assignedShardEntry : assignedShards.entrySet()) {
             String shardId = assignedShardEntry.getKey();
             ShardInfo shardInfo = assignedShardEntry.getValue();
@@ -217,40 +219,24 @@ public class StreamKinesisP<T> extends AbstractProcessor {
                     || (parentShardId != null && !closedProcessedShards.contains(parentShardId))
                     || (adjacentParentShardId != null && !closedProcessedShards.contains(adjacentParentShardId))) {
 
-//                getLogger().info("[#" + processorIndex + "] Won't read the shard " + shardInfo + "...");
-
                 continue;
             }
 
-            getLogger().info("[#" + processorIndex + "] Reading the data from shard " + shardId + "...");
+            logger().info("[#" + processorIndex + "] Reading the data from shard " + shardId + "...");
 
             String shardIterator = shardInfo.getCurrentShardIterator();
             String lastSequenceNumber = shardInfo.getLastSequenceNumber();
             int wmSourceUtilIndex = shardInfo.getWmSourceUtilIndex();
 
             if (shardIterator == null) {
-                getLogger().info("[#" + processorIndex + "] Retrieving the shard iterator...");
-
-                GetShardIteratorRequest shardIteratorRequest = new GetShardIteratorRequest()
-                        .withStreamName(streamName)
-                        .withShardId(shardId)
-                        .withShardIteratorType(lastSequenceNumber != null ? AFTER_SEQUENCE_NUMBER : TRIM_HORIZON);
-
-                if (lastSequenceNumber != null) {
-                    shardIteratorRequest.setStartingSequenceNumber(lastSequenceNumber);
-                }
-
-                GetShardIteratorResult shardIteratorResult = amazonKinesis.getShardIterator(shardIteratorRequest);
-                shardIterator = shardIteratorResult.getShardIterator();
+                logger().info("[#" + processorIndex + "] Retrieving the shard iterator...");
+                shardIterator = kinesisClient.getShardIterator(shardId, lastSequenceNumber);
             }
 
             try {
-                GetRecordsRequest getRecordsRequest = new GetRecordsRequest()
-                        .withShardIterator(shardIterator)
-                        .withLimit(READ_LIMIT);
-                GetRecordsResult getRecordsResult = amazonKinesis.getRecords(getRecordsRequest);
-
-                List<Record> shardRecords = getRecordsResult.getRecords(); // TODO: handle expired iterator and other stuff
+                // TODO: handle expired iterator and other stuff
+                GetRecordsResult getRecordsResult = kinesisClient.getRecords(shardIterator);
+                List<Record> shardRecords = getRecordsResult.getRecords();
 
                 Traverser<Object> shardRecordsTraverser = shardRecords.isEmpty()
                         ? watermarkSourceUtil.handleNoEvent()
@@ -267,7 +253,7 @@ public class StreamKinesisP<T> extends AbstractProcessor {
 
                 String nextShardIterator = getRecordsResult.getNextShardIterator();
                 if (nextShardIterator == null) {
-                    // Shard has been closed and we've processed all the data in it
+                    // Shard has been closed and we've processed all its data
                     closedShards.add(shardId);
                 }
 
@@ -280,31 +266,35 @@ public class StreamKinesisP<T> extends AbstractProcessor {
         }
 
         if (!closedShards.isEmpty()) {
-            getLogger().info("[#" + processorIndex + "] The following closed shards has been processed: " + closedShards);
+            logger().info("[#" + processorIndex + "] The following closed shards has been processed: " + closedShards);
             closedProcessedShards.addAll(closedShards);
 
-            getLogger().info("[#" + processorIndex + "] All closed processed shards: ");
-            closedProcessedShards.forEach(System.out::println);
+            logAllClosedShards(closedProcessedShards);
 
             assignShards(false);
         }
 
         if (partialResultTraversers.isEmpty()) {
-            Utils.sleepInterruptibly(10, TimeUnit.MILLISECONDS); // TODO: double check this
+            sleepInterruptibly(10, TimeUnit.MILLISECONDS); // TODO: double check if we need this at all
         }
 
         traverser = traverseIterable(partialResultTraversers).flatMap(Function.identity());
-
         emitFromTraverser(traverser);
 
         return false;
     }
 
+    private void logAllClosedShards(Set<String> closedShards) {
+        StringBuffer allClosedShardsMsgBuilder = new StringBuffer("[#" + processorIndex + "] All closed processed shards: ");
+        closedShards.forEach(s -> allClosedShardsMsgBuilder.append(s).append(", "));
+        logger().info(allClosedShardsMsgBuilder.toString());
+    }
+
     @Override
     public void close(Throwable error) {
-        getLogger().info("[#" + processorIndex + "] Releasing the resources...");
-        if (amazonKinesis != null) {
-            amazonKinesis.shutdown();
+        logger().info("[#" + processorIndex + "] Releasing the resources...");
+        if (kinesisClient != null) {
+            kinesisClient.close();
         }
     }
 
@@ -316,14 +306,14 @@ public class StreamKinesisP<T> extends AbstractProcessor {
         return () -> new StreamKinesisP<>(region, awsCredentials, streamName, projectionFn, wmGenParams);
     }
 
-
     public static class ShardInfo {
 
-        private String parentShardId;
-        private String adjacentParentShardId;
+        private final String parentShardId;
+        private final String adjacentParentShardId;
+        private final int wmSourceUtilIndex;
+
         private String currentShardIterator;
         private String lastSequenceNumber;
-        private int wmSourceUtilIndex;
 
         public ShardInfo(String parentShardId, String adjacentParentShardId, int wmSourceUtilIndex) {
             this.parentShardId = parentShardId;
@@ -335,16 +325,12 @@ public class StreamKinesisP<T> extends AbstractProcessor {
             return parentShardId;
         }
 
-        public void setParentShardId(String parentShardId) {
-            this.parentShardId = parentShardId;
-        }
-
         public String getAdjacentParentShardId() {
             return adjacentParentShardId;
         }
 
-        public void setAdjacentParentShardId(String adjacentParentShardId) {
-            this.adjacentParentShardId = adjacentParentShardId;
+        public int getWmSourceUtilIndex() {
+            return wmSourceUtilIndex;
         }
 
         public String getCurrentShardIterator() {
@@ -361,14 +347,6 @@ public class StreamKinesisP<T> extends AbstractProcessor {
 
         public void setLastSequenceNumber(String lastSequenceNumber) {
             this.lastSequenceNumber = lastSequenceNumber;
-        }
-
-        public int getWmSourceUtilIndex() {
-            return wmSourceUtilIndex;
-        }
-
-        public void setWmSourceUtilIndex(int wmSourceUtilIndex) {
-            this.wmSourceUtilIndex = wmSourceUtilIndex;
         }
 
         @Override

@@ -1,4 +1,4 @@
-package com.hazelcast.jet.kinesis;
+package com.hazelcast.jet.kinesis.sample;
 
 import com.amazonaws.auth.AWSCredentials;
 import com.amazonaws.regions.Regions;
@@ -10,18 +10,20 @@ import com.hazelcast.jet.Job;
 import com.hazelcast.jet.core.ProcessorMetaSupplier;
 import com.hazelcast.jet.core.WatermarkGenerationParams;
 import com.hazelcast.jet.function.DistributedFunction;
+import com.hazelcast.jet.kinesis.StreamKinesisP;
+import com.hazelcast.jet.kinesis.WriteKinesisP;
 import com.hazelcast.jet.pipeline.*;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
 
-import static com.hazelcast.jet.aggregate.AggregateOperations.counting;
 import static com.hazelcast.jet.pipeline.Sources.streamFromProcessorWithWatermarks;
 
 public class TestApp {
 
     private static final int PREFERRED_LOCAL_PARALLELISM = 1;
 //    private static final int PREFERRED_LOCAL_PARALLELISM = 2;
+
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     public static void main(String[] args) {
@@ -53,6 +55,7 @@ public class TestApp {
 
     public static KinesisTestClient.TestEvent toTestEvent(Record record) {
         try {
+            // TODO: don't use a global {@code OBJECT_MAPPER}
             return OBJECT_MAPPER.readValue(record.getData().array(), KinesisTestClient.TestEvent.class);
         } catch (IOException e) {
             throw new RuntimeException("Failed to deserialize the test event instance", e);

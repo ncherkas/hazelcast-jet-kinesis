@@ -7,16 +7,29 @@ import com.amazonaws.services.kinesis.model.SequenceNumberRange;
 import com.amazonaws.services.kinesis.model.Shard;
 import com.hazelcast.jet.core.WatermarkGenerationParams;
 import com.hazelcast.jet.function.DistributedFunction;
+import com.hazelcast.logging.ILogger;
+import com.hazelcast.logging.LoggerFactory;
+import com.hazelcast.logging.NoLogFactory;
 import org.testng.annotations.Test;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
 
 public class StreamKinesisPTest {
 
     @Test
     public void testAssignShards() {
+        LoggerFactory loggerFactory = new NoLogFactory();
+
         StreamKinesisP<Record> kinesisP =
-                new StreamKinesisP<>(Regions.DEFAULT_REGION, null, "s1", DistributedFunction.identity(), WatermarkGenerationParams.noWatermarks());
+                new StreamKinesisP<Record>(Regions.DEFAULT_REGION, null, "s1", DistributedFunction.identity(), WatermarkGenerationParams.noWatermarks()) {
+                    @Override
+                    ILogger logger() {
+                        return loggerFactory.getLogger("test");
+                    }
+                };
 
         kinesisP.totalParallelism = 4;
         kinesisP.closedProcessedShards = new HashSet<>();

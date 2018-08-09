@@ -24,6 +24,10 @@ import java.util.stream.Stream;
 
 import static java.util.stream.Collectors.toList;
 
+/**
+ * Amazon Kinesis Sink.
+ * @param <T> data type
+ */
 public class WriteKinesisP<T> implements Processor {
 
     private final String streamName;

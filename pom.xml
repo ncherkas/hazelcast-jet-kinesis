@@ -26,11 +26,17 @@
             <artifactId>hazelcast-jet</artifactId>
             <version>0.6.1</version>
         </dependency>
-        <!-- TODO: embed ? -->
+        <!-- TODO: embed & shade -->
         <dependency>
             <groupId>com.amazonaws</groupId>
             <artifactId>aws-java-sdk-kinesis</artifactId>
             <version>1.11.361</version>
+        </dependency>
+        <!-- TODO: embed & shade -->
+        <dependency>
+            <groupId>com.google.guava</groupId>
+            <artifactId>guava</artifactId>
+            <version>25.1-jre</version>
         </dependency>
         <!-- TODO: for test purpose -->
         <dependency>
@@ -38,12 +44,6 @@
             <artifactId>jackson-databind</artifactId>
             <!-- TODO: similar to the ver. used by AWS SDK -->
             <version>2.6.7.1</version>
-        </dependency>
-        <!-- TODO: try to not rely on it much -->
-        <dependency>
-            <groupId>com.google.guava</groupId>
-            <artifactId>guava</artifactId>
-            <version>25.1-jre</version>
         </dependency>
         <dependency>
             <groupId>org.testng</groupId>
