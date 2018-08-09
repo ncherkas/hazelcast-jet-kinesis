@@ -12,7 +12,7 @@ You can either provide an explicit Client Id and Client Secret or it will use th
 ## Scaling
 AKDS partitions are called Shards. A Shard is the throughput unit of the Stream. It's append only and stores the data ordered by the arrival time. A single Shard can handle 1000 data records per second, or 1MB/sec for writes and 10 000 data records per second, or 2MB/sec for reads. There is also a new feature called [Enhanced Fan-Out](https://docs.aws.amazon.com/streams/latest/dev/introduction-to-enhanced-consumers.html) provided for additional cost. We may add a support for it in the future.
 
-Generally, the scaling works in the way that there is a so-called a Hash-Key Range which is split among Shards of a single Stream. Each emitted Data Record comes with a Partition Key which maps to the Hash Key Range and defines a Shard the Data Record belongs to. When you create the Stream you specify a number of Shards which, in turn, defines the entire throughput of the Stream. At this point the Hash Key Range is evenly distributed among Shards. Later you can scale up or scale down by splitting or merging these Shards. Consider the simplified example:
+Generally, the scaling works in the way that there is a so-called Hash-Key Range which is split among Shards of a single Stream. Each emitted Data Record comes with a Partition Key which maps to the Hash Key Range and defines a Shard the Data Record belongs to. When you create the Stream you specify a number of Shards which, in turn, defines the entire throughput of the Stream. At this point the Hash Key Range is evenly distributed among Shards. Later you can scale up or scale down by splitting or merging these Shards. Consider the simplified example:
 
 ```
                         Stream "user-clicks"
