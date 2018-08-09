@@ -66,6 +66,38 @@ public class KinesisClient implements Closeable {
         return amazonKinesis.getRecords(getRecordsRequest);
     }
 
+    public void putRecords(List<PutRecordsRequestEntry> records) {
+        PutRecordsRequest putRecordsRequest = new PutRecordsRequest()
+                .withStreamName(streamName)
+                .withRecords(records);
+
+        PutRecordsResult putRecordsResult = amazonKinesis.putRecords(putRecordsRequest);
+        if (putRecordsResult.getFailedRecordCount() > 0) {
+            retryPutRecordsRequest(putRecordsRequest, putRecordsResult);
+        }
+    }
+
+    private void retryPutRecordsRequest(PutRecordsRequest putRecordsRequest, PutRecordsResult putRecordsResult) {
+        List<PutRecordsRequestEntry> putRecordsRequestEntryList = putRecordsRequest.getRecords();
+
+        while (putRecordsResult.getFailedRecordCount() > 0) {
+            // TODO: throw exception if attempts count exceed some limit ?
+            final List<PutRecordsRequestEntry> failedRecordsList = new ArrayList<>();
+            final List<PutRecordsResultEntry> putRecordsResultEntryList = putRecordsResult.getRecords();
+            for (int i = 0; i < putRecordsResultEntryList.size(); i++) {
+                final PutRecordsRequestEntry putRecordRequestEntry = putRecordsRequestEntryList.get(i);
+                final PutRecordsResultEntry putRecordsResultEntry = putRecordsResultEntryList.get(i);
+                if (putRecordsResultEntry.getErrorCode() != null) {
+                    failedRecordsList.add(putRecordRequestEntry);
+                }
+            }
+
+            putRecordsRequestEntryList = failedRecordsList;
+            putRecordsRequest.setRecords(putRecordsRequestEntryList);
+            putRecordsResult = amazonKinesis.putRecords(putRecordsRequest);
+        }
+    }
+
     @Override
     public void close() {
         amazonKinesis.shutdown();

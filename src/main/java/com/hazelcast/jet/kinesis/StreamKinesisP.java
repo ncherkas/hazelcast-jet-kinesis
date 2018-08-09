@@ -84,7 +84,6 @@ public class StreamKinesisP<T> extends AbstractProcessor {
                 ? new AWSStaticCredentialsProvider(awsCredentials)
                 : new DefaultAWSCredentialsProviderChain();
 
-        // TODO: allow to pass a client config
         AmazonKinesis amazonKinesis = AmazonKinesisClientBuilder.standard()
                 .withRegion(region)
                 .withCredentials(credentialsProvider)

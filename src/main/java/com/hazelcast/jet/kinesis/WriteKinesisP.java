@@ -7,7 +7,7 @@ import com.amazonaws.auth.DefaultAWSCredentialsProviderChain;
 import com.amazonaws.regions.Regions;
 import com.amazonaws.services.kinesis.AmazonKinesis;
 import com.amazonaws.services.kinesis.AmazonKinesisClientBuilder;
-import com.amazonaws.services.kinesis.model.PutRecordRequest;
+import com.amazonaws.services.kinesis.model.*;
 import com.hazelcast.jet.core.Inbox;
 import com.hazelcast.jet.core.Outbox;
 import com.hazelcast.jet.core.Processor;
@@ -18,7 +18,9 @@ import com.hazelcast.logging.ILogger;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 import java.nio.ByteBuffer;
+import java.util.ArrayDeque;
 import java.util.List;
+import java.util.Queue;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Stream;
 
@@ -30,23 +32,22 @@ import static java.util.stream.Collectors.toList;
  */
 public class WriteKinesisP<T> implements Processor {
 
-    private final String streamName;
-    private final AmazonKinesis amazonKinesis;
+    private static final int PUT_RECORDS_LIMIT = 500;
+
+    private final KinesisClient kinesisClient;
     private final DistributedFunction<T, String> partitionKeyFn;
     private final DistributedFunction<T, ByteBuffer> toByteBufferFn;
+    private final Queue<T> buffer = new ArrayDeque<>(PUT_RECORDS_LIMIT);
+    private final AtomicLong putsCounter = new AtomicLong(); // For test purpose
 
-    // For test purpose
-    private final AtomicLong putsCounter = new AtomicLong();
     private int processorIndex;
-
     private ILogger logger;
 
     /**
      * TODO: implement batching
      */
-    public WriteKinesisP(String streamName, AmazonKinesis amazonKinesis, DistributedFunction<T, String> partitionKeyFn, DistributedFunction<T, ByteBuffer> toByteBufferFn) {
-        this.streamName = streamName;
-        this.amazonKinesis = amazonKinesis;
+    public WriteKinesisP(KinesisClient kinesisClient, DistributedFunction<T, String> partitionKeyFn, DistributedFunction<T, ByteBuffer> toByteBufferFn) {
+        this.kinesisClient = kinesisClient;
         this.partitionKeyFn = partitionKeyFn;
         this.toByteBufferFn = toByteBufferFn;
     }
@@ -65,23 +66,41 @@ public class WriteKinesisP<T> implements Processor {
     @Override
     @SuppressWarnings("unchecked")
     public void process(int ordinal, @Nonnull Inbox inbox) {
-        inbox.drain((Object item) -> {
-            PutRecordRequest putRecordRequest = new PutRecordRequest()
-                    .withStreamName(streamName)
-                    .withPartitionKey(partitionKeyFn.apply((T) item))
-                    .withData(toByteBufferFn.apply((T) item));
-
-            amazonKinesis.putRecord(putRecordRequest);
-
-            if (putsCounter.incrementAndGet() % 100 == 0) {
-                logger.info("[#" + processorIndex + "] " + putsCounter.get() + " puts so far...");
+        while (!inbox.isEmpty()) {
+            buffer.add((T) inbox.poll());
+            if (buffer.size() == PUT_RECORDS_LIMIT) {
+                flush();
             }
+        }
 
-        });
+        // TODO: Do we need this if we've already implemented complete() ?
+        if (!buffer.isEmpty()) {
+            flush();
+        }
+    }
+
+    private void flush() {
+        List<PutRecordsRequestEntry> records = buffer.stream()
+                .map(this::toPutRecordsRequestEntry)
+                .collect(toList());
+
+        kinesisClient.putRecords(records);
+        buffer.clear();
+
+        logger.info("[#" + processorIndex + "] " + putsCounter.incrementAndGet() + " batch puts so far...");
+    }
+
+    private PutRecordsRequestEntry toPutRecordsRequestEntry(T item) {
+        return new PutRecordsRequestEntry()
+                .withPartitionKey(partitionKeyFn.apply(item))
+                .withData(toByteBufferFn.apply(item));
     }
 
     @Override
     public boolean complete() {
+        if (!buffer.isEmpty()) {
+            flush();
+        }
         return true;
     }
 
@@ -100,7 +119,7 @@ public class WriteKinesisP<T> implements Processor {
         private final DistributedFunction<T, String> partitionKeyFn;
         private final DistributedFunction<T, ByteBuffer> toByteBufferFn;
 
-        private transient AmazonKinesis amazonKinesis;
+        private transient KinesisClient kinesisClient;
 
         public Supplier(Regions region, AWSCredentials awsCredentials, String streamName,
                         DistributedFunction<T, String> partitionKeyFn,
@@ -119,24 +138,25 @@ public class WriteKinesisP<T> implements Processor {
                     ? new AWSStaticCredentialsProvider(awsCredentials)
                     : new DefaultAWSCredentialsProviderChain();
 
-            // TODO: allow to pass a client config
-            this.amazonKinesis = AmazonKinesisClientBuilder.standard()
+            AmazonKinesis amazonKinesis = AmazonKinesisClientBuilder.standard()
                     .withRegion(region)
                     .withCredentials(credentialsProvider)
                     .build();
+
+            this.kinesisClient = new KinesisClient(streamName, amazonKinesis);
         }
 
         @Override
         public List<Processor> get(int count) {
-            return Stream.generate(() -> new WriteKinesisP<>(streamName, amazonKinesis, partitionKeyFn, toByteBufferFn))
+            return Stream.generate(() -> new WriteKinesisP<>(kinesisClient, partitionKeyFn, toByteBufferFn))
                     .limit(count)
                     .collect(toList());
         }
 
         @Override
         public void close(Throwable error) {
-            if (amazonKinesis != null) {
-                amazonKinesis.shutdown();
+            if (kinesisClient != null) {
+                kinesisClient.close();
             }
         }
     }
