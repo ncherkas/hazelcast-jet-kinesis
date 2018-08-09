@@ -158,6 +158,9 @@ public class StreamKinesisP<T> extends AbstractProcessor {
 
     @VisibleForTesting
     Map<String, Shard> getAssignment(List<Shard> shards) {
+        // Usually the response comes sorted but let's make sure
+        shards.sort(Comparator.comparing(Shard::getShardId));
+
         Map<String, Shard> shardsById = shards.stream()
                 .collect(toMap(Shard::getShardId, Function.identity()));
 
@@ -174,7 +177,7 @@ public class StreamKinesisP<T> extends AbstractProcessor {
                         shardsByAdjacentParentId.getOrDefault(s.getShardId(),
                                 emptyList())));
 
-        List<Shard> rootShards = shardsById.values().stream()
+        List<Shard> rootShards = shards.stream()
                 .filter(s -> !shardsById.containsKey(s.getParentShardId()))
                 .collect(toList());
 
