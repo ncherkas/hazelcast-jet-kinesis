@@ -133,7 +133,6 @@ public class StreamKinesisP<T> extends AbstractProcessor {
 
             logger().info("[#" + processorIndex + "] Current shard assignment: " + assignedShards.keySet());
 
-            // TODO: Hack, double check this
             int assignedShardsCount = assignedShards.size();
             if (assignedShardsCount > wsuPartitionCount) {
                 wsuPartitionCount = assignedShardsCount;
