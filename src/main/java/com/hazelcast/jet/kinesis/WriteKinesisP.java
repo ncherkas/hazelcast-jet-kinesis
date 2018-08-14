@@ -43,9 +43,6 @@ public class WriteKinesisP<T> implements Processor {
     private int processorIndex;
     private ILogger logger;
 
-    /**
-     * TODO: implement batching
-     */
     public WriteKinesisP(KinesisClient kinesisClient, DistributedFunction<T, String> partitionKeyFn, DistributedFunction<T, ByteBuffer> toByteBufferFn) {
         this.kinesisClient = kinesisClient;
         this.partitionKeyFn = partitionKeyFn;
