@@ -9,8 +9,6 @@ import com.amazonaws.services.kinesis.AmazonKinesis;
 import com.amazonaws.services.kinesis.AmazonKinesisClientBuilder;
 import com.amazonaws.services.kinesis.model.*;
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.collect.Iterables;
-import com.google.common.collect.Lists;
 import com.hazelcast.jet.JetInstance;
 import com.hazelcast.jet.Traverser;
 import com.hazelcast.jet.Traversers;
@@ -25,13 +23,10 @@ import com.hazelcast.logging.ILogger;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
-import java.util.stream.Collectors;
 
 import static com.hazelcast.jet.Traversers.traverseIterable;
 import static com.hazelcast.jet.kinesis.Utils.sleepInterruptibly;
-import static java.util.Collections.emptyList;
 import static java.util.concurrent.TimeUnit.SECONDS;
-import static java.util.stream.Collectors.*;
 
 /**
  * Amazon Kinesis Source.
@@ -128,7 +123,7 @@ public class StreamKinesisP<T> extends AbstractProcessor {
                 String shardId = shardEntry.getKey();
                 Shard shard = shardEntry.getValue();
                 assignedShards.put(shardId, new ShardInfo(shard.getParentShardId(),
-                        shard.getAdjacentParentShardId(), assignedShards.size()));
+                        shard.getAdjacentParentShardId(), assignedShards.size())); // TODO: check if it breaks anything if wm util index > shards count
             }
 
             logger().info("[#" + processorIndex + "] Current shard assignment: " + assignedShards.keySet());
@@ -156,41 +151,19 @@ public class StreamKinesisP<T> extends AbstractProcessor {
 
     @VisibleForTesting
     Map<String, Shard> getAssignment(List<Shard> shards) {
-        // Usually the response comes sorted but let's make sure
+        // Usually the response comes sorted but let's make sure we deal with the same order every time
+        // ...and yes, now we really depend on the shard ids
         shards.sort(Comparator.comparing(Shard::getShardId));
 
-        Map<String, Shard> shardsById = shards.stream()
-                .collect(toMap(Shard::getShardId, Function.identity()));
-
-        Map<String, List<Shard>> shardsByParentId = shards.stream()
-                .filter(s -> shardsById.containsKey(s.getParentShardId()))
-                .collect(Collectors.groupingBy(Shard::getParentShardId));
-
-        Map<String, List<Shard>> shardsByAdjacentParentId = shards.stream()
-                .filter(s -> shardsById.containsKey(s.getAdjacentParentShardId()))
-                .collect(Collectors.groupingBy(Shard::getAdjacentParentShardId));
-
-        com.google.common.graph.Traverser<Shard> shardsTraverser = com.google.common.graph.Traverser.forGraph(s ->
-                shardsByParentId.getOrDefault(s.getShardId(),
-                        shardsByAdjacentParentId.getOrDefault(s.getShardId(),
-                                emptyList())));
-
-        List<Shard> rootShards = shards.stream()
-                .filter(s -> !shardsById.containsKey(s.getParentShardId()))
-                .collect(toList());
-
-        Iterable<Shard> bfTraversedShards = shardsTraverser.breadthFirst(rootShards);
-
-        logger().info("[#" + processorIndex + "] BF Traversal: " + Iterables.transform(bfTraversedShards, Shard::getShardId));
-        List<Shard> bfOrderedShards = Lists.newArrayList(bfTraversedShards);
-
+        // TODO: do a thorough testing of a new simplified approach and think about plan "B"
         Map<String, Shard> assignment = new LinkedHashMap<>();
-        for (int i = 0; i < bfOrderedShards.size(); i++) {
-            Shard shard = bfOrderedShards.get(i);
+        for (int i = 0; i < shards.size(); i++) {
+            Shard shard = shards.get(i);
             if (i % totalParallelism == processorIndex) {
                 assignment.put(shard.getShardId(), shard);
             }
         }
+
         return assignment;
     }
 
@@ -292,7 +265,7 @@ public class StreamKinesisP<T> extends AbstractProcessor {
     }
 
     @Override
-    public void close(Throwable error) {
+    public void close() {
         logger().info("[#" + processorIndex + "] Releasing the resources...");
         if (kinesisClient != null) {
             kinesisClient.close();

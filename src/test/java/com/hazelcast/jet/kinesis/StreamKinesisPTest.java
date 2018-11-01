@@ -47,7 +47,12 @@ public class StreamKinesisPTest {
         shards.add(createShard("shardId-000000000001", null, "25", "50", null)); // root, open
         shards.add(createShard("shardId-000000000002", null, "50", "75", null)); // root, open
         shards.add(createShard("shardId-000000000003", null, "75", "90", null)); // root, open
-        shards.add(createShard("shardId-000000000004", null, "90", "95", null)); // root, open
+//        shards.add(createShard("shardId-000000000004", null, "90", "95", null)); // root, open
+        shards.add(createShard("shardId-000000000004", null, "90", "95", "1000")); // root, open
+
+        shards.add(createShard("shardId-000000000012", "shardId-000000000004", "90", "92", null)); // open
+        shards.add(createShard("shardId-000000000013", "shardId-000000000004", "92", "95", null)); // open
+
         shards.add(createShard("shardId-000000000005", null, "95", "100", "1000")); // root, closed
         shards.add(createShard("shardId-000000000010", "shardId-000000000005", "95", "98", null)); // open
         shards.add(createShard("shardId-000000000011", "shardId-000000000005", "98", "100", null)); // open

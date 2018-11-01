@@ -17,8 +17,11 @@ import com.google.common.collect.Maps;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.time.Instant;
+import java.time.LocalDateTime;
 import java.util.*;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.stream.IntStream;
 
 import static java.util.stream.Collectors.toList;
 
@@ -31,10 +34,12 @@ public class KinesisTestClient {
      * TODO: consider https://aws.amazon.com/blogs/big-data/test-your-streaming-data-solution-with-the-new-amazon-kinesis-data-generator/
      */
 
-    private static final String DEFAULT_STREAM_NAME = "nc_test_stream_01";
+    private static final String DEFAULT_STREAM_NAME = "nc_test_stream_03";
     private static final Regions DEFAULT_REGION = Regions.EU_CENTRAL_1;
-    private static final int WRITE_LIMIT = 100_000;
+    private static final int WRITE_LIMIT = 1000_000;
     private static final int READ_LIMIT = 10_000;
+    private static final int PARALLELISM = 10;
+    private static final int WRITE_BATCH_SIZE = 10;
 
     private final String streamName;
     private final AmazonKinesis amazonKinesis;
@@ -76,6 +81,41 @@ public class KinesisTestClient {
         }
 
         amazonKinesis.putRecord(putRecordRequest);
+    }
+
+    public void pushBatch(List<TestEvent> testEvents) {
+        try {
+            PutRecordsRequest putRecordsRequest = new PutRecordsRequest();
+            putRecordsRequest.setStreamName(DEFAULT_STREAM_NAME);
+            List<PutRecordsRequestEntry> putRecordsRequestEntryList = new ArrayList<>();
+
+            for (TestEvent testEvent : testEvents) {
+                PutRecordsRequestEntry putRecordsRequestEntry = new PutRecordsRequestEntry();
+                putRecordsRequestEntry.setData(ByteBuffer.wrap(objectMapper.writeValueAsBytes(testEvent)));
+                putRecordsRequestEntry.setPartitionKey(testEvent.getUserKey());
+                putRecordsRequestEntryList.add(putRecordsRequestEntry);
+            }
+
+            putRecordsRequest.setRecords(putRecordsRequestEntryList);
+            PutRecordsResult putRecordsResult = amazonKinesis.putRecords(putRecordsRequest);
+
+            while (putRecordsResult.getFailedRecordCount() > 0) {
+                final List<PutRecordsRequestEntry> failedRecordsList = new ArrayList<>();
+                final List<PutRecordsResultEntry> putRecordsResultEntryList = putRecordsResult.getRecords();
+                for (int i = 0; i < putRecordsResultEntryList.size(); i++) {
+                    final PutRecordsRequestEntry putRecordRequestEntry = putRecordsRequestEntryList.get(i);
+                    final PutRecordsResultEntry putRecordsResultEntry = putRecordsResultEntryList.get(i);
+                    if (putRecordsResultEntry.getErrorCode() != null) {
+                        failedRecordsList.add(putRecordRequestEntry);
+                    }
+                }
+                putRecordsRequestEntryList = failedRecordsList;
+                putRecordsRequest.setRecords(putRecordsRequestEntryList);
+                putRecordsResult = amazonKinesis.putRecords(putRecordsRequest);
+            }
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException("Failed to serialize the test events batch", e);
+        }
     }
 
     public List<TestEvent> read() {
@@ -148,17 +188,34 @@ public class KinesisTestClient {
     private static void write(KinesisTestClient testClient) {
         System.out.println("Writing " + WRITE_LIMIT + " events to the stream...");
 
-        for (int i = 0; i < WRITE_LIMIT; i++) {
-            String userKey = "u" + ThreadLocalRandom.current().nextInt(1, 11);
-            String device = ThreadLocalRandom.current().nextBoolean() ? "laptop" : "mobile";
-            TestEvent.Type type = TestEvent.Type.values()[ThreadLocalRandom.current().nextInt(0, TestEvent.Type.values().length)];
-            Map<String, Object> data = Maps.newHashMap(Collections.singletonMap("device", device));
-            testClient.push(userKey, type, data);
+        AtomicLong eventsCounter = new AtomicLong(1);
 
-            if ((i + 1) % 1000 == 0) {
-                System.out.println((i + 1) + " events written so far...");
+        IntStream.range(0, PARALLELISM).parallel().forEach(val -> {
+            List<TestEvent> writeBuffer = new ArrayList<>();
+
+            for (int i = 1; i <= WRITE_LIMIT / PARALLELISM; i++) {
+                ThreadLocalRandom localRandom = ThreadLocalRandom.current();
+                String userKey = "u" + localRandom.nextInt(1, 11);
+                String device = localRandom.nextBoolean() ? "laptop" : "mobile";
+                TestEvent.Type type = TestEvent.Type.values()[localRandom.nextInt(0, TestEvent.Type.values().length)];
+                Map<String, Object> data = Maps.newHashMap(Collections.singletonMap("device", device));
+
+                TestEvent event =
+                        new TestEvent(UUID.randomUUID().toString(), userKey, type, data, Instant.now().toEpochMilli());
+                writeBuffer.add(event);
+
+                if (writeBuffer.size() == WRITE_BATCH_SIZE) {
+                    eventsCounter.addAndGet(WRITE_BATCH_SIZE);
+                    testClient.pushBatch(writeBuffer);
+                    writeBuffer.clear();
+                }
+
+                if (i % 1000 == 0) {
+                    System.out.println(eventsCounter.get() + " events written so far... " + LocalDateTime.now() + " [" + Thread.currentThread().getName() + "]");
+                }
             }
-        }
+        });
+
     }
 
     private static void read(KinesisTestClient testClient) {

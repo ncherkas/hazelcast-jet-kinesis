@@ -20,7 +20,7 @@ Generally, the scaling works in the way that there is a so-called Hash-Key Range
                             Hash Key Range
 0                                                                 N
 -------------------------------------------------------------------
-1) Initially created, throughput X1
+1) Initially created, throughput X2
               
            Shard 01 [0..N/2]                            Shard 02 [N/2..N]
                

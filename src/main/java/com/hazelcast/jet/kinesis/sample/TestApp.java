@@ -9,6 +9,7 @@ import com.hazelcast.jet.JetInstance;
 import com.hazelcast.jet.Job;
 import com.hazelcast.jet.core.ProcessorMetaSupplier;
 import com.hazelcast.jet.core.WatermarkGenerationParams;
+import com.hazelcast.jet.datamodel.TimestampedEntry;
 import com.hazelcast.jet.function.DistributedFunction;
 import com.hazelcast.jet.kinesis.StreamKinesisP;
 import com.hazelcast.jet.kinesis.WriteKinesisP;
@@ -17,36 +18,44 @@ import com.hazelcast.jet.pipeline.*;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 
+import static com.amazonaws.regions.Regions.EU_CENTRAL_1;
+import static com.hazelcast.jet.aggregate.AggregateOperations.counting;
 import static com.hazelcast.jet.pipeline.Sources.streamFromProcessorWithWatermarks;
 
 public class TestApp {
 
-    private static final int PREFERRED_LOCAL_PARALLELISM = 1;
-//    private static final int PREFERRED_LOCAL_PARALLELISM = 2;
+    private static final int PREFERRED_LOCAL_PARALLELISM = 2;
 
+    private static final String SOURCE_STREAM = "nc_test_stream_03";
+    private static final String SINK_STREAM = "nc_test_stream_04";
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     public static void main(String[] args) {
         runKinesisTest();
     }
 
+    @SuppressWarnings("unchecked")
     private static void runKinesisTest() {
-        Pipeline p = Pipeline.create();
+        Pipeline pipeline = Pipeline.create();
 
-        p.<Record>drawFrom(streamFromProcessorWithWatermarks("streamKinesis", w -> streamKinesisP(Regions.EU_CENTRAL_1, null, "nc_test_stream_01", DistributedFunction.identity(), w)))
-//                .addTimestamps(r -> r.getApproximateArrivalTimestamp().getTime(), 10)
-                .map(TestApp::toTestEvent)
-//                .window(WindowDefinition.tumbling(10_000))
-//                .aggregate(counting())
-//                .drainTo(Sinks.noop());
-                // Can't use ObjectMapper within the Distributed Function
-                .drainTo(Sinks.fromProcessor("writeKinesis", writeKinesisP(Regions.EU_CENTRAL_1, null, "nc_test_stream_02", te -> ((KinesisTestClient.TestEvent) te).getUserKey(), te -> ByteBuffer.wrap(te.toString().getBytes()))));
-//                .drainTo(Sinks.logger());
+        StreamStage<TimestampedEntry<String, Long>> streamingStage = pipeline.<KinesisTestClient.TestEvent>drawFrom(streamFromProcessorWithWatermarks("streamKinesis",
+                w -> streamKinesisP(EU_CENTRAL_1, null, SOURCE_STREAM, TestApp::toTestEvent, w)))
+                .addTimestamps(KinesisTestClient.TestEvent::getTimestampMillis, 1000)
+//                .peek(KinesisTestClient.TestEvent::toString)
+                .window(WindowDefinition.tumbling(10_000))
+                .groupingKey(KinesisTestClient.TestEvent::getUserKey)
+                .aggregate(counting());
+
+        streamingStage.map(OBJECT_MAPPER::writeValueAsString).drainTo(Sinks.logger());
+
+        streamingStage.drainTo(Sinks.fromProcessor("writeKinesis", writeKinesisP(EU_CENTRAL_1, null, SINK_STREAM,
+                        te -> ((TimestampedEntry<String, Long>) te).getKey(),
+                        te -> ByteBuffer.wrap(OBJECT_MAPPER.writeValueAsBytes(te)))));
 
         JetInstance jet = Jet.newJetInstance();
-        Jet.newJetInstance();
+        Jet.newJetInstance(); // 2 members running locally
 
-        Job job = jet.newJob(p);
+        Job job = jet.newJob(pipeline);
         System.out.println("--- Job started ---");
         job.join();
 

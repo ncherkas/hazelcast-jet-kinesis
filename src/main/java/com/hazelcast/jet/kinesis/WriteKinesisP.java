@@ -16,7 +16,6 @@ import com.hazelcast.jet.function.DistributedFunction;
 import com.hazelcast.logging.ILogger;
 
 import javax.annotation.Nonnull;
-import javax.annotation.Nullable;
 import java.nio.ByteBuffer;
 import java.util.ArrayDeque;
 import java.util.List;
@@ -102,7 +101,7 @@ public class WriteKinesisP<T> implements Processor {
     }
 
     @Override
-    public void close(@Nullable Throwable error) throws Exception {
+    public void close() throws Exception {
 
     }
 
