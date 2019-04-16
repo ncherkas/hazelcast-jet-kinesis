@@ -17,7 +17,7 @@ import static com.amazonaws.services.kinesis.model.ShardIteratorType.TRIM_HORIZO
 public class KinesisClient implements Closeable {
 
 //    private static final int READ_LIMIT = 10_000;
-    private static final int READ_LIMIT = 1000;
+    private static final int READ_LIMIT = 1000; // For the simple test
 
     private final String streamName;
     private final AmazonKinesis amazonKinesis;

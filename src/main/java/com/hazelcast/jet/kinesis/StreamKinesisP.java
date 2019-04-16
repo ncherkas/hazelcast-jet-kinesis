@@ -57,7 +57,7 @@ public class StreamKinesisP<T> extends AbstractProcessor {
     /**
      * TODO: google/jet @Nonnull annotations?
      * TODO: check for retention period
-     * TODO: fault tolerance
+     * TODO: fault tolerance aka checkpointing
      * TODO: fine log level instead of info
      */
     public StreamKinesisP(Regions region, AWSCredentials awsCredentials, String streamName,
@@ -189,6 +189,9 @@ public class StreamKinesisP<T> extends AbstractProcessor {
             ShardInfo shardInfo = assignedShardEntry.getValue();
             String parentShardId = shardInfo.getParentShardId();
             String adjacentParentShardId = shardInfo.getAdjacentParentShardId();
+            // So, imagine that re-assignment happens we check if this shard has been already processed,
+            // or if it wasn't but its parent is still being processed
+            // If any of these conditions is TRUE we skip this shard
             if (closedProcessedShards.contains(shardId)
                     || (parentShardId != null && !closedProcessedShards.contains(parentShardId))
                     || (adjacentParentShardId != null && !closedProcessedShards.contains(adjacentParentShardId))) {
@@ -217,7 +220,7 @@ public class StreamKinesisP<T> extends AbstractProcessor {
                         : traverseIterable(shardRecords).flatMap(record -> {
                             shardInfo.setLastSequenceNumber(record.getSequenceNumber());
                             T projectedRecord = projectionFn.apply(record);
-                            if (projectedRecord == null) {
+                            if (projectedRecord == null) { // TODO: why? because Jet doesn't work with nulls?
                                 return Traversers.empty();
                             }
                             return watermarkSourceUtil.handleEvent(projectedRecord, wmSourceUtilIndex);
