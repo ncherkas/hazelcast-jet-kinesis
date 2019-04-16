@@ -34,23 +34,20 @@ public class TestApp {
         runKinesisTest();
     }
 
-    @SuppressWarnings("unchecked")
     private static void runKinesisTest() {
         Pipeline pipeline = Pipeline.create();
 
         StreamStage<TimestampedEntry<String, Long>> streamingStage = pipeline.<KinesisTestClient.TestEvent>drawFrom(streamFromProcessorWithWatermarks("streamKinesis",
-                w -> streamKinesisP(EU_CENTRAL_1, null, SOURCE_STREAM, TestApp::toTestEvent, w)))
+                    w -> streamKinesisP(EU_CENTRAL_1, null, SOURCE_STREAM, TestApp::toTestEvent, w)))
                 .addTimestamps(KinesisTestClient.TestEvent::getTimestampMillis, 1000)
-//                .peek(KinesisTestClient.TestEvent::toString)
                 .window(WindowDefinition.tumbling(10_000))
                 .groupingKey(KinesisTestClient.TestEvent::getUserKey)
                 .aggregate(counting());
 
         streamingStage.map(OBJECT_MAPPER::writeValueAsString).drainTo(Sinks.logger());
 
-        streamingStage.drainTo(Sinks.fromProcessor("writeKinesis", writeKinesisP(EU_CENTRAL_1, null, SINK_STREAM,
-                        te -> ((TimestampedEntry<String, Long>) te).getKey(),
-                        te -> ByteBuffer.wrap(OBJECT_MAPPER.writeValueAsBytes(te)))));
+        streamingStage.drainTo(Sinks.fromProcessor("writeKinesis",
+                writeKinesisP(EU_CENTRAL_1, null, SINK_STREAM, TimestampedEntry::getKey, TestApp::toByteBuffer)));
 
         JetInstance jet = Jet.newJetInstance();
         Jet.newJetInstance(); // 2 members running locally
@@ -60,6 +57,10 @@ public class TestApp {
         job.join();
 
         Jet.shutdownAll();
+    }
+
+    public static ByteBuffer toByteBuffer(TimestampedEntry<String, Long> te) throws Exception {
+        return ByteBuffer.wrap(OBJECT_MAPPER.writeValueAsBytes(te));
     }
 
     public static KinesisTestClient.TestEvent toTestEvent(Record record) {
