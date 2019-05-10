@@ -69,7 +69,6 @@ public class WriteKinesisP<T> implements Processor {
             }
         }
 
-        // TODO: Do we need this if we've already implemented complete() ?
         flush();
     }
 

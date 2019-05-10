@@ -54,12 +54,6 @@ public class StreamKinesisP<T> extends AbstractProcessor {
     private long nextMetadataCheck = Long.MIN_VALUE;
     private int wsuPartitionCount;
 
-    /**
-     * TODO: google/jet @Nonnull annotations?
-     * TODO: check for retention period
-     * TODO: fault tolerance aka checkpointing
-     * TODO: fine log level instead of info
-     */
     public StreamKinesisP(Regions region, AWSCredentials awsCredentials, String streamName,
                           DistributedFunction<Record, T> projectionFn,
                           WatermarkGenerationParams<? super T> wmGenParams) {
@@ -74,7 +68,6 @@ public class StreamKinesisP<T> extends AbstractProcessor {
 
     @Override
     protected void init(Context context) {
-        // TODO: can we clean up {@code awsCredentials} at this point?
         AWSCredentialsProvider credentialsProvider = awsCredentials != null
                 ? new AWSStaticCredentialsProvider(awsCredentials)
                 : new DefaultAWSCredentialsProviderChain();
@@ -90,7 +83,6 @@ public class StreamKinesisP<T> extends AbstractProcessor {
         this.totalParallelism = context.totalParallelism();
         this.wsuPartitionCount = 0;
 
-        // TODO: double check the ISet naming
         JetInstance jetInstance = context.jetInstance();
         this.closedProcessedShards =
                 jetInstance.getHazelcastInstance().getSet("streamKinesis_" + streamName + "_closedProcessedShards");
@@ -155,7 +147,7 @@ public class StreamKinesisP<T> extends AbstractProcessor {
         // ...and yes, now we really depend on the shard ids
         shards.sort(Comparator.comparing(Shard::getShardId));
 
-        // TODO: do a thorough testing of a new simplified approach and think about plan "B"
+        // TODO: do a thorough testing of a new simplified approach and think about plan "B" (when id format changes)
         Map<String, Shard> assignment = new LinkedHashMap<>();
         for (int i = 0; i < shards.size(); i++) {
             Shard shard = shards.get(i);
@@ -211,7 +203,7 @@ public class StreamKinesisP<T> extends AbstractProcessor {
             }
 
             try {
-                // TODO: handle expired iterator and other stuff
+                // TODO: handle expired iterator
                 GetRecordsResult getRecordsResult = kinesisClient.getRecords(shardIterator);
                 List<Record> shardRecords = getRecordsResult.getRecords();
 
@@ -252,7 +244,7 @@ public class StreamKinesisP<T> extends AbstractProcessor {
         }
 
         if (partialResultTraversers.isEmpty()) {
-            sleepInterruptibly(10, TimeUnit.MILLISECONDS); // TODO: double check if we need this at all
+            sleepInterruptibly(10, TimeUnit.MILLISECONDS);
         }
 
         traverser = traverseIterable(partialResultTraversers).flatMap(Function.identity());
